@@ -91,13 +91,15 @@ class CloudGatherer:
         # Rotate and add the points to the internal pointcloud
         rotated_points = []
         for point in points:
-            msg_as_tf_quat = [point.x, point.y, point.z, 0]  # Convert point to list
+            # Convert point to list
+            msg_as_tf_quat = [point.x, point.y, point.z, 0]
             # Rotate
             temp1 = quaternion_multiply(rot_tf, msg_as_tf_quat)
             temp2 = quaternion_multiply(temp1, quaternion_conjugate(rot_tf))
             # Convert back to R3
             new_point = Point(temp2[0], temp2[1], temp2[2])
-            new_point = addPoints(new_point, body_position)  # Consider position
+            # Consider position
+            new_point = addPoints(new_point, body_position)
             rotated_points.append(new_point)
         self.add_points_to_cloud_no_rotation(rotated_points)
         # Again, why do I name things point Point and points -A
@@ -126,15 +128,18 @@ class CloudGatherer:
         # Offset = last_offset + bits_in_datatype / 8
         fields = []
         cul_off = 0
-        f1 = PointField(name="x", offset=cul_off, datatype=PointField.FLOAT32, count=1)
+        f1 = PointField(name="x", offset=cul_off,
+                        datatype=PointField.FLOAT32, count=1)
         fields.append(f1)
         cul_off = cul_off + 4
 
-        f2 = PointField(name="y", offset=cul_off, datatype=PointField.FLOAT32, count=1)
+        f2 = PointField(name="y", offset=cul_off,
+                        datatype=PointField.FLOAT32, count=1)
         fields.append(f2)
         cul_off = cul_off + 4
 
-        f3 = PointField(name="z", offset=cul_off, datatype=PointField.FLOAT32, count=1)
+        f3 = PointField(name="z", offset=cul_off,
+                        datatype=PointField.FLOAT32, count=1)
         fields.append(f3)
         cul_off = cul_off + 4
 
@@ -221,7 +226,8 @@ def xyzspeed_from_pc2(
         rospy.logwarn("This type of pointcloud is not supported")
         return
     if pc2.is_bigendian:
-        rospy.logwarn("Pointcloud is bigendian, this script is probably wrong?")
+        rospy.logwarn(
+            "Pointcloud is bigendian, this script is probably wrong?")
     # print(msg.data)
     # print(type(msg.data))
     # print(type(msg.data[0]))
@@ -240,7 +246,8 @@ def xyzspeed_from_pc2(
             [data[indx + 4], data[indx + 5], data[indx + 6], data[indx + 7]], np.uint8
         )
         z = np.array(
-            [data[indx + 8], data[indx + 9], data[indx + 10], data[indx + 11]], np.uint8
+            [data[indx + 8], data[indx + 9],
+                data[indx + 10], data[indx + 11]], np.uint8
         )
         speed = np.array(
             [data[indx + 12], data[indx + 13], data[indx + 14], data[indx + 15]],
@@ -318,5 +325,6 @@ if __name__ == "__main__":
         callback_args=(pub),
         queue_size=2,
     )
-    rospy.loginfo("Ready to publish pointclouds in odom frame disguised in imu_link")
+    rospy.loginfo(
+        "Ready to publish pointclouds in odom frame disguised in imu_link")
     rospy.spin()
