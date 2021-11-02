@@ -168,6 +168,8 @@ catkin_install_python(PROGRAMS
   scripts/aimu_meas_to_bag.py
   scripts/pcloud_gatherer004.py
   scripts/pcloud_gatherer003.py
+  scripts/radar_ego_velocity_estimation001.py
+  scripts/fuckrviz_repub.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

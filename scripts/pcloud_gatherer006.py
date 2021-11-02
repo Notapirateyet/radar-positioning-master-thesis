@@ -3,6 +3,7 @@
 
 """This is intended to gather all the published pointclouds from one topic, transform them to the "map"-frame 
 and republish them.
+It will remove all points every X seconds.
 It can either assume a stationary observer who is only rotating and sending Imu messages on "imu/data", or
 a moving observer who sends a pose ("Odometry") on "odometry/filtered"
 """
@@ -36,11 +37,17 @@ class CloudGatherer:
     position = Point(0, 0, 0)
     keep_old_points = False
     recieved_odometry = False
+    last_reset = rospy.Time.from_sec(0)
+    KEEP_TIME = np.inf  # secs
 
     def __init__(self) -> None:
         self.cloud.header.frame_id = "odom"
         # print(self.cloud.points)
         # print(self.last_Imu.header.stamp) #debug
+
+    def delete_points(self):
+        self.cloud = PointCloud()
+        self.cloud.header.frame_id = "odom"
 
     def add_points_to_cloud_no_rotation(self, new_points):
         if self.keep_old_points:
@@ -205,6 +212,12 @@ cg = CloudGatherer()  # Global class, hope for the best
 
 def pc_callback(msg, args):
     pub = args
+    dur = rospy.Time.now() - cg.last_reset
+    if dur.secs > cg.KEEP_TIME:  # TODO: make variable
+        cg.delete_points()
+        rospy.loginfo("Deleting points")
+        cg.last_reset = rospy.Time.now()
+    # I don't remeber what creates this error, but if I get it, I just don't add the speeds
     try:
         cg.rotate_and_add(
             msg.points, msg.channels[0]
