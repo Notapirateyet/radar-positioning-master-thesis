@@ -10,7 +10,6 @@ from sensor_msgs.msg import PointCloud2, ChannelFloat32, PointCloud
 from geometry_msgs.msg import Point
 from tf.transformations import unit_vector
 from nav_msgs.msg import Odometry
-from rospy.numpy_msg import numpy_msg
 from sklearn import linear_model
 
 # Distance from median, or edge case, distance from mean
@@ -48,7 +47,8 @@ def xyzspeed_from_pc2v2(
         rospy.logwarn("This type of pointcloud is not supported")
         return
     if pc2.is_bigendian:
-        rospy.logwarn("Pointcloud is bigendian, this script is probably wrong?")
+        rospy.logwarn(
+            "Pointcloud is bigendian, this script is probably wrong?")
     # print(msg.data)
     # print(type(msg.data))
     # print(type(msg.data[0]))
@@ -66,7 +66,8 @@ def xyzspeed_from_pc2v2(
             [data[indx + 4], data[indx + 5], data[indx + 6], data[indx + 7]], np.uint8
         )
         z = np.array(
-            [data[indx + 8], data[indx + 9], data[indx + 10], data[indx + 11]], np.uint8
+            [data[indx + 8], data[indx + 9],
+                data[indx + 10], data[indx + 11]], np.uint8
         )
         speed = np.array(
             [data[indx + 12], data[indx + 13], data[indx + 14], data[indx + 15]],
@@ -123,12 +124,12 @@ def estimate_ownship_velocity(
     return theta_prim, velocity_cov
 
 
-def create_odom_and_pub(velocities, pub, velocity_covariance=-1):
+def create_odom_and_pub(velocities, pub, velocity_covariance=-1, sensor_frame_id="radar_link"):
     # Create the odometry message
     odm = Odometry()
     odm.header.stamp = rospy.Time.now()
-    odm.header.frame_id = "radar_link"
-    odm.child_frame_id = "radar_link"
+    odm.header.frame_id = sensor_frame_id
+    odm.child_frame_id = sensor_frame_id
     # 6x6
     odm.twist.covariance = np.zeros(36)
     if len(velocity_covariance) != 9:
@@ -158,7 +159,8 @@ def pc2_callback(msg: PointCloud2, pub: rospy.Publisher):
         points, velocities
     )
     rospy.logdebug(ownship_velocity_cov)
-    create_odom_and_pub(ownship_velocity, pub, ownship_velocity_cov)
+    create_odom_and_pub(ownship_velocity, pub,
+                        ownship_velocity_cov, msg.header.frame_id)
 
 
 def pc1_callback(msg: PointCloud, pub: rospy.Publisher):
@@ -177,10 +179,10 @@ def pc1_callback(msg: PointCloud, pub: rospy.Publisher):
 if __name__ == "__main__":
     rospy.init_node("ego_velocity_estimator", anonymous=False)
     # TODO: Subscribe to a pc2
-    pub = rospy.Publisher("radar1/velocity_estimate", Odometry, queue_size=1)
+    pub = rospy.Publisher("radar/velocity_estimate", Odometry, queue_size=1)
 
     sub1 = rospy.Subscriber(
-        "radar1/target_list_cartesian",
+        "radar/target_list_cartesian",
         PointCloud2,
         callback=pc2_callback,
         callback_args=(pub),

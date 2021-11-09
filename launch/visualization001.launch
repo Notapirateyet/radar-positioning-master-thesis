@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<launch>
+<arg name="rviz_conf" default="$(find umrr_driver)/rviz/default.rviz" />
+
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(arg rviz_conf)" />
+</launch>
+

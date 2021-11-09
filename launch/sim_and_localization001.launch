@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<launch>
+<!-- start of STATIC TF setup -->
+  <!-- <node pkg="tf2_ros" type="static_transform_publisher" name="imu_base_tf_broadcaster" args="0 0 0 0 0 0 1 imu_link base_link" /> -->
+  <param name="/use_sim_time" value="true"/>
+
+  <node name="base_link_2_radar0" pkg="tf2_ros" type="static_transform_publisher" args="0 0 0 0 0 0 base_link radar0" />
+  <node name="base_link_2_radar0_mse" pkg="tf2_ros" type="static_transform_publisher" args="0 0 0 0 0 0 base_link radar0_mse" />
+  <node name="base_link_2_radar1" pkg="tf2_ros" type="static_transform_publisher" args="0 0 0 0.7071068 -0.7071068 0 0 base_link radar1" />
+  <node name="base_link_2_radar1_mse" pkg="tf2_ros" type="static_transform_publisher" args="0 0 0 0.7071068 -0.7071068 0 0  base_link radar1_mse" />
+  <node pkg="tf2_ros" type="static_transform_publisher" name="base_radar_tf_broadcaster" args="0 0 0 0 0 0 1 base_link radar_link" />
+  <node pkg="tf2_ros" type="static_transform_publisher" name="base_imu_tf_broadcaster" args="0 0 0 0 0 0 1 base_link imu_link" />
+<!-- end of STATIC TF setup -->
+
+
+  <node pkg="radar_positioning" type="radar_ego_velocity_estimation001.py" name="ego_velocity_estimate" output="screen">
+    <param name="/use_sim_time" value="true"/>
+  </node>
+
+  <node pkg="robot_localization" type="ukf_localization_node" name="ekf_local">
+    <rosparam command="load" file="$(find robot_localization)/params/ekf_imu_005.yaml" />
+    <param name="/use_sim_time" value="true"/>
+
+    <!--  Placeholder for output topic remapping
+    <remap from="odometry/filtered" to=""/>
+    <remap from="accel/filtered" to=""/>
+    -->
+  </node>
+
+  <node pkg="radar_positioning" type="pcloud_gatherer008.py" name="pcloud_gatherer00x" output="screen">
+    <param name="keep_old_points" value="true"/>
+    <param name="remove_outliers" value="true"/>
+  </node>
+  <!-- end of LOCALIZATION setup -->
+
+
+</launch>
+
+

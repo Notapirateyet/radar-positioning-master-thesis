@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""This is intended to gather all the published pointclouds from one topic, transform them to the "map"-frame 
+"""This is intended to gather all the published pointclouds from one topic, transform them to the "odom"-frame
 and republish them.
-It will remove all points every X seconds.
+It will remove all points every X seconds. (default: Inf)
 It can either assume a stationary observer who is only rotating and sending Imu messages on "imu/data", or
 a moving observer who sends a pose ("Odometry") on "odometry/filtered"
 """
@@ -30,6 +30,61 @@ def addPoints(p1, p2):
     return Point(p1.x + p2.x, p1.y + p2.y, p1.z + p2.z)
 
 
+def reject_outliers_median(data, m=3.0):
+    """Returns a list of bools indicating if they're inliers (true) or outliers (false)"""
+    d = np.abs(data - np.median(data))
+    mdev = np.median(d)
+    s = d / (mdev if mdev else 1.0)
+    return s < m
+
+
+def reject_outliers_thresholding(data, threshold=0.0):
+    """Returns a list of bools indicating if they're inliers (true) or outliers (false)"""
+    return data > threshold
+
+
+def remove_outliers(points: List[Point], s_chnl: ChannelFloat32, rcs_chnl: ChannelFloat32) -> Tuple[List[Point], ChannelFloat32, ChannelFloat32]:
+    """ Detects outliers using either speed or rcs data, and returns the clean data. """
+
+    extracted_rcs = rcs_chnl.values
+    extracted_rcs = np.array(extracted_rcs)
+    extracted_speed = s_chnl.values
+    extracted_speed = np.array(extracted_speed)
+    tmp_points = []
+    for cur_p in points:
+        tmp_points.append([cur_p.x, cur_p.y, cur_p.z])
+    extracted_points = np.array(tmp_points)
+
+    mask1 = reject_outliers_thresholding(extracted_rcs, threshold=0.0)
+    mask2 = reject_outliers_median(extracted_speed)
+    mask = mask1 & mask2
+
+    # rospy.loginfo(extracted_points)
+    # rospy.loginfo(mask)
+
+    masked_rcs = extracted_rcs[mask]
+    masked_speed = extracted_speed[mask]
+    mask = mask.squeeze()  # I hate this solution -A
+    masked_points = extracted_points[mask]
+
+    masked_rcs = masked_rcs.tolist()
+    masked_speed = masked_speed.tolist()
+
+    output_points = []
+    for cp in masked_points:
+        cp = cp.squeeze()  # :/
+        tmp_point = Point(x=cp[0], y=cp[1], z=cp[2])
+        output_points.append(tmp_point)
+
+    # rospy.loginfo(masked_rcs)
+    # rospy.loginfo(rcs_chnl.values)
+
+    rcs_chnl.values = masked_rcs
+    s_chnl.values = masked_speed
+
+    return output_points, s_chnl, rcs_chnl
+
+
 class CloudGatherer:
     """Saves the total cloud"""
 
@@ -42,6 +97,7 @@ class CloudGatherer:
     last_reset = rospy.Time.from_sec(0)
     KEEP_TIME = np.inf  # secs
     publish_tf = False
+    remove_outliers = False
     # Frames i keep messing up
     transform_points_to_frame = "odom"
 
@@ -68,12 +124,19 @@ class CloudGatherer:
         else:
             self.cloud.channels[0] = channel
 
-    def rotate_and_add(self, points_base, channel=None, origin_frame="base_link"):
+    def add_RCS_to_cloud_no_rotation(self, channel):
+        if self.keep_old_points:
+            for cc in channel.values:
+                self.cloud.channels[1].values.append(cc)
+        else:
+            self.cloud.channels[1] = channel
+
+    def rotate_and_add(self, points_base, channels=None, origin_frame="base_link"):
         # Channel must be a ChannelFloat32, describing the speed_radial
         # Check to see if we can do the transform
         if self.last_Imu.header.stamp.secs == 0:
             rospy.logwarn("No imu data recieved yet")
-            return  # Next part breaks without IMU data
+            return  # Next part breaks without IMU data to fall back on
         if self.recieved_odometry:
             rot_tf = [
                 self.odom.pose.pose.orientation.x,
@@ -133,18 +196,26 @@ class CloudGatherer:
         # Again, why do I name things point Point and points -A
 
         # Check if we also give it a speed_radial channel
-        if channel != None:
-            if self.cloud.channels == []:
-                new_channel = ChannelFloat32()
-                new_channel.name = "Speed_Radial"
-                self.cloud.channels.append(new_channel)
-            if channel.name != "speed_radial":
-                rospy.logwarn(
-                    "You are converting: "
-                    + channel.name
-                    + ", to speed_radial. In name only. No value conversion."
-                )
-            self.add_speed_to_cloud_no_rotation(channel)
+        # DEBUG
+        # rospy.loginfo(channels)
+        if channels != None:
+            for cur_chnl in channels:
+                if self.cloud.channels == []:
+                    new_channel = ChannelFloat32()
+                    new_channel.name = "Speed_Radial"
+                    self.cloud.channels.append(new_channel)
+                    new_channel = ChannelFloat32()
+                    new_channel.name = "RCS"
+                    self.cloud.channels.append(new_channel)
+                if cur_chnl.name == "speed_radial":
+                    self.add_speed_to_cloud_no_rotation(cur_chnl)
+                elif cur_chnl.name == "RCS":
+                    self.add_RCS_to_cloud_no_rotation(cur_chnl)
+                else:
+                    rospy.logwarn(
+                        "Wrong channel name? detected in Pcloudgatherer008"
+                    )
+                # If you get a .name on None exception here, the RCS channel is generated wrong
 
     def new_cloud(self, points):
         self.cloud.points = points
@@ -180,6 +251,14 @@ class CloudGatherer:
             )  # [m/s]
             cul_off = cul_off + 4
             fields.append(f4)
+            f5 = PointField(
+                name="RCS",
+                offset=cul_off,
+                datatype=PointField.FLOAT32,
+                count=1,
+            )
+            cul_off = cul_off + 4
+            fields.append(f5)
 
         # Force the data to be the specified datatype (here, float32)
         # data = np.array([[0, 0, 0, 0], [1, 0, 0, 0.1]], dtype=np.float32)
@@ -192,6 +271,7 @@ class CloudGatherer:
                         self.cloud.points[indx].y,
                         self.cloud.points[indx].z,
                         self.cloud.channels[0].values[indx],
+                        self.cloud.channels[1].values[indx],
                     ]
                 )
         else:
@@ -203,6 +283,7 @@ class CloudGatherer:
                         self.cloud.points[indx].z,
                     ]
                 )
+        # rospy.loginfo(data)
         data = np.array(data, dtype=np.float32)
 
         new_cloud = pc2.create_cloud(self.cloud.header, fields, data)
@@ -232,6 +313,9 @@ class CloudGatherer:
     def set_tfBuffer(self, buffer: tf2_ros.Buffer):
         self.tfbuffer = buffer
 
+    def set_remove_outliers(self, desired_state: bool):
+        self.remove_outliers = desired_state
+
 
 cg = CloudGatherer()  # Global class, hope for the best
 
@@ -246,16 +330,16 @@ def pc_callback(msg, args):
     # I don't remeber what creates this error, but if I get it, I just don't add the speeds
     try:
         cg.rotate_and_add(
-            msg.points, msg.channels[0]
-        )  # takes 3d points and channelfloat32
+            msg.points, msg.channels
+        )  # takes 3d points and channelfloat32[]
     except IndexError:
         cg.rotate_and_add(msg.points)
     cg.publish(pub)
 
 
-def xyzspeed_from_pc2(
+def xyzspeedrcs_from_pc2(
     pc2: PointCloud2,
-) -> Tuple[List[Point], ChannelFloat32]:
+) -> Tuple[List[Point], ChannelFloat32, ChannelFloat32]:
 
     # Assume height is always 1, even though it isn't
     if pc2.height != 1:
@@ -269,7 +353,15 @@ def xyzspeed_from_pc2(
     # print(type(msg.data[0]))
     data = pc2.data
     s_chnl = ChannelFloat32()
-    s_chnl.name = "speed_radial"
+    s_chnl.name = "speed_radial"  # Saved in message as "Speed_Radial"
+    try:
+        rcs_present = pc2.fields[4].name == "RCS"
+    except:
+        rcs_present = False
+    rcs_chnl = None
+    if rcs_present:
+        rcs_chnl = ChannelFloat32()
+        rcs_chnl.name = pc2.fields[4].name   # "RCS"
     points = []
     if pc2.fields[3].name != "Speed_Radial":
         raise IndexError("Radial speed not at expected position")
@@ -291,6 +383,14 @@ def xyzspeed_from_pc2(
             [data[indx + 12], data[indx + 13], data[indx + 14], data[indx + 15]],
             np.uint8,
         )
+        if rcs_present:
+            rcs = np.array(
+                [data[indx + 16], data[indx + 17],
+                    data[indx + 18], data[indx + 19]],
+                np.uint8,
+            )
+            rcs = rcs.view(np.float32)
+            rcs_chnl.values.append(rcs)
 
         x = x.view(np.float32)
         y = y.view(np.float32)
@@ -303,7 +403,7 @@ def xyzspeed_from_pc2(
             point
         )  # points point and Point are different things -> consider renaming
         s_chnl.values.append(speed)
-    return points, s_chnl
+    return points, s_chnl, rcs_chnl
 
 
 def pc2_callback(msg: PointCloud2, args):
@@ -317,9 +417,13 @@ def pc2_callback(msg: PointCloud2, args):
         cg.last_reset = rospy.Time.now()
 
     # For the pc2 we need to extract the points
-    points, s_chnl = xyzspeed_from_pc2(msg)
+    points, s_chnl, rcs_chnl = xyzspeedrcs_from_pc2(msg)
 
-    cg.rotate_and_add(points, s_chnl, origin_frame=msg.header.frame_id)
+    # Outlier detection
+    points, s_chnl, rcs_chnl = remove_outliers(points, s_chnl, rcs_chnl)
+
+    cg.rotate_and_add(points, [s_chnl, rcs_chnl],
+                      origin_frame=msg.header.frame_id)
     cg.publish(pub)
 
 
@@ -352,7 +456,9 @@ def odometry_callback(msg):
 
 if __name__ == "__main__":
     rospy.init_node("pc_rebublisher", anonymous=False)
+    # Set param values. TODO: make them the same format
     cg.keep_old_points = rospy.get_param("~keep_old_points", True)
+    cg.set_remove_outliers(rospy.get_param("~remove_outliers", False))
     pub = rospy.Publisher("radar/collection", PointCloud2, queue_size=2)
 
     i_sub = rospy.Subscriber("imu/data", Imu, imu_callback)
