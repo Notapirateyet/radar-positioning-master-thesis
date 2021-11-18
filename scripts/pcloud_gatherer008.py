@@ -20,6 +20,8 @@ import numpy as np
 from tf.transformations import *
 import sensor_msgs.point_cloud2 as pc2
 import tf2_ros
+# logging
+import csv
 
 
 def minusP32(point1, point2):
@@ -46,6 +48,7 @@ def reject_outliers_thresholding(data, threshold=0.0):
 def remove_outliers(points: List[Point], s_chnl: ChannelFloat32, rcs_chnl: ChannelFloat32) -> Tuple[List[Point], ChannelFloat32, ChannelFloat32]:
     """ Detects outliers using either speed or rcs data, and returns the clean data. """
 
+    # Get the values out of the channels and into a numpy array
     extracted_rcs = rcs_chnl.values
     extracted_rcs = np.array(extracted_rcs)
     extracted_speed = s_chnl.values
@@ -55,18 +58,19 @@ def remove_outliers(points: List[Point], s_chnl: ChannelFloat32, rcs_chnl: Chann
         tmp_points.append([cur_p.x, cur_p.y, cur_p.z])
     extracted_points = np.array(tmp_points)
 
+    # Create the rejection mask
+    # 1 is determined from a high RCS value, 2 is trying to find things moving at a different speed (pedestrians)
     mask1 = reject_outliers_thresholding(extracted_rcs, threshold=0.0)
     mask2 = reject_outliers_median(extracted_speed)
     mask = mask1 & mask2
 
-    # rospy.loginfo(extracted_points)
-    # rospy.loginfo(mask)
-
+    # Actually use the mask to remove the points
     masked_rcs = extracted_rcs[mask]
     masked_speed = extracted_speed[mask]
     mask = mask.squeeze()  # I hate this solution -A
     masked_points = extracted_points[mask]
 
+    # Convert back into the input formats
     masked_rcs = masked_rcs.tolist()
     masked_speed = masked_speed.tolist()
 
@@ -75,9 +79,6 @@ def remove_outliers(points: List[Point], s_chnl: ChannelFloat32, rcs_chnl: Chann
         cp = cp.squeeze()  # :/
         tmp_point = Point(x=cp[0], y=cp[1], z=cp[2])
         output_points.append(tmp_point)
-
-    # rospy.loginfo(masked_rcs)
-    # rospy.loginfo(rcs_chnl.values)
 
     rcs_chnl.values = masked_rcs
     s_chnl.values = masked_speed
@@ -162,7 +163,7 @@ class CloudGatherer:
                 self.position.y,
                 self.position.z,
             )
-            # The following is from: https://se.mathworks.com/help/robotics/ref/quaternion.rotatepoint.html#d123e37541
+        # The math below is from: https://se.mathworks.com/help/robotics/ref/quaternion.rotatepoint.html#d123e37541
         # Rotate and add the points to the internal pointcloud
         rotated_points = []
         for point in points_base:
@@ -176,11 +177,10 @@ class CloudGatherer:
                 new_point = Point(out_point.point.x,
                                   out_point.point.y, out_point.point.z)
                 # debug
-                rospy.loginfo_once("Rotation success")
+                # rospy.loginfo_once("Rotation success")
 
             except Exception as e:
                 rospy.loginfo_throttle(3.0, e)
-                # cg.publish_tf = True
                 # Convert point to list
                 msg_as_tf_quat = [point.x, point.y, point.z, 0]
                 # Rotate
@@ -196,8 +196,6 @@ class CloudGatherer:
         # Again, why do I name things point Point and points -A
 
         # Check if we also give it a speed_radial channel
-        # DEBUG
-        # rospy.loginfo(channels)
         if channels != None:
             for cur_chnl in channels:
                 if self.cloud.channels == []:
@@ -407,9 +405,22 @@ def imu_callback(msg: Imu):
         #               " and " + t.child_frame_id)
 
 
-def odometry_callback(msg):
+def odometry_callback(msg: Odometry, args: csv.writer):
+    logwriter = args
     cg.set_odom(msg)
     cg.publish_tf = False
+    if logwriter != None:
+        data = [msg.pose.pose.position.x,
+                msg.pose.pose.position.y,
+                msg.pose.pose.position.z,
+                msg.pose.pose.orientation.x,
+                msg.pose.pose.orientation.y,
+                msg.pose.pose.orientation.z,
+                msg.pose.pose.orientation.w,
+                msg.twist.twist.linear.x,
+                msg.twist.twist.linear.y,
+                msg.twist.twist.linear.z]
+        logwriter.writerow(data)
 
 
 if __name__ == "__main__":
@@ -417,10 +428,21 @@ if __name__ == "__main__":
     # Set param values. TODO: make them the same format
     cg.keep_old_points = rospy.get_param("~keep_old_points", True)
     cg.set_remove_outliers(rospy.get_param("~remove_outliers", False))
+    # Create publishers
     pub = rospy.Publisher("radar/collection", PointCloud2, queue_size=2)
-
+    # Create subscribers and associated things
+    log_to_csv = False
+    if log_to_csv:
+        logfile = open("/home/rincewind/Documents/logs/pcloudgatherer_out003.csv",
+                       'w', encoding='UTF8')
+        writer = csv.writer(logfile)
+        header = ["x", "y", "z", "qx", "qy", "qz", "qw", "vx", "vy", "vz"]
+        writer.writerow(header)
+    else:
+        writer = None
     i_sub = rospy.Subscriber("imu/data", Imu, imu_callback)
-    o_sub = rospy.Subscriber("odometry/filtered", Odometry, odometry_callback)
+    o_sub = rospy.Subscriber(
+        "odometry/filtered", Odometry, odometry_callback, callback_args=writer)
 
     tfBuffer = tf2_ros.Buffer()
     listener = tf2_ros.TransformListener(tfBuffer)
@@ -442,3 +464,5 @@ if __name__ == "__main__":
     )
     rospy.loginfo("Ready to publish collected pointclouds")
     rospy.spin()
+    # end?
+    logfile.close()
